@@ -1,6 +1,6 @@
 # proxy-llm
 
-Proxy HTTP local minimal entre [opencode](https://opencode.ai) (ou tout client Vercel AI SDK) et une API gateway OpenAI-compatible qui attend `arguments` au lieu de `parameters` dans les définitions d'outils.
+Proxy HTTPS local minimal entre [opencode](https://opencode.ai) (ou tout client Vercel AI SDK) et une API gateway OpenAI-compatible qui attend `arguments` au lieu de `parameters` dans les définitions d'outils.
 
 ## Problème résolu
 
@@ -18,33 +18,68 @@ Certaines API gateways rejettent la requête avec une `422` car elles attendent 
 
 ### Sans Docker
 
+Le proxy génère un certificat auto-signé au premier lancement si `TLS_CERT`/`TLS_KEY` n'existent pas — il faut donc avoir `openssl` disponible, ou fournir ses propres fichiers.
+
 ```bash
-node proxy.js
-# ou avec options :
-PORT=9090 TARGET_URL=https://llm.local node proxy.js
+# Générer un cert pour localhost (une seule fois)
+mkdir -p certs
+openssl req -x509 -newkey rsa:4096 -sha256 -days 3650 -nodes \
+  -keyout certs/key.pem -out certs/cert.pem \
+  -subj "/CN=localhost" \
+  -addext "subjectAltName=DNS:localhost,IP:127.0.0.1"
+
+TLS_CERT=./certs/cert.pem TLS_KEY=./certs/key.pem node proxy.js
 ```
 
 ### Avec Docker
+
+Le conteneur génère automatiquement le certificat au premier démarrage.
+Monter `/certs` comme volume nommé pour le **persister** entre les redémarrages (évite de re-trusting opencode à chaque fois).
 
 ```bash
 # Build
 docker build -t proxy-llm .
 
-# Run — résolution DNS via l'hôte (Linux)
-docker run -d \
-  --name proxy-llm \
-  --network host \
-  proxy-llm
+# Créer le volume une seule fois
+docker volume create proxy-llm-certs
 
-# Run — avec IP explicite si llm.local n'est pas dans le DNS du conteneur
+# Run
 docker run -d \
   --name proxy-llm \
   -p 8989:8989 \
+  -v proxy-llm-certs:/certs \
   --add-host llm.local:<IP_DE_VOTRE_APIGATE> \
   proxy-llm
 
 # Logs
 docker logs -f proxy-llm
+```
+
+---
+
+## Faire confiance au certificat côté opencode
+
+opencode est une application Node.js — il suffit de pointer `NODE_EXTRA_CA_CERTS` vers le certificat généré par le proxy, sans toucher au trust store système.
+
+**Étape 1 — récupérer le cert**
+
+```bash
+# Depuis Docker
+docker cp proxy-llm:/certs/cert.pem ~/proxy-llm-cert.pem
+
+# Ou si lancé sans Docker, le cert est dans ./certs/cert.pem
+```
+
+**Étape 2 — lancer opencode avec le cert**
+
+```bash
+NODE_EXTRA_CA_CERTS=~/proxy-llm-cert.pem opencode
+```
+
+Ou l'exporter dans votre shell (`~/.bashrc` / `~/.zshrc`) pour ne pas avoir à le répéter :
+
+```bash
+export NODE_EXTRA_CA_CERTS=~/proxy-llm-cert.pem
 ```
 
 ---
@@ -55,7 +90,9 @@ docker logs -f proxy-llm
 |---|---|---|
 | `PORT` | `8989` | Port d'écoute du proxy |
 | `TARGET_URL` | `https://llm.local` | URL upstream **sans** `/v1` (voir ci-dessous) |
-| `UPSTREAM_INSECURE` | `false` | `true` pour désactiver la vérification TLS (cert auto-signé) |
+| `TLS_CERT` | `/certs/cert.pem` | Chemin vers le certificat TLS |
+| `TLS_KEY` | `/certs/key.pem` | Chemin vers la clé privée TLS |
+| `UPSTREAM_INSECURE` | `false` | `true` pour désactiver la vérification TLS upstream (cert auto-signé côté apigate) |
 | `LOG_BODY` | `false` | `true` pour dumper le body transformé dans les logs |
 | `TIMEOUT_MS` | `300000` | Timeout upstream en ms (5 min par défaut) |
 
@@ -67,15 +104,13 @@ docker logs -f proxy-llm
 
 ## Configuration opencode.json
 
-Remplacer le `baseURL` de votre provider par l'adresse du proxy :
-
 ```json
 {
   "providers": {
     "mon-provider": {
       "npm": "@ai-sdk/openai-compatible",
       "options": {
-        "baseURL": "http://localhost:8989/v1"
+        "baseURL": "https://localhost:8989/v1"
       }
     }
   }
@@ -89,12 +124,21 @@ Le `/v1` reste dans le `baseURL` côté opencode — c'est lui qui compose `/v1/
 ## Logs de debug
 
 ```
-2026-06-25T10:00:01Z [info] proxy-llm listening on http://0.0.0.0:8989
-2026-06-25T10:00:01Z [info] upstream: https://llm.local
+2026-06-25T10:00:01Z [info] proxy-llm listening on https://0.0.0.0:8989
+2026-06-25T10:00:01Z [info] forwarding to: https://llm.local
+2026-06-25T10:00:01Z [info] TLS cert: /certs/cert.pem
 2026-06-25T10:00:05Z [info] [a3f7b2] ← POST /v1/chat/completions
 2026-06-25T10:00:05Z [info] [a3f7b2] → llm.local/v1/chat/completions [tools: parameters→arguments]
 2026-06-25T10:00:06Z [info] [a3f7b2] ↓ 200 (text/event-stream)
 2026-06-25T10:00:22Z [info] [a3f7b2] done
+```
+
+Pour voir le body JSON complet envoyé à l'apigate :
+
+```bash
+LOG_BODY=true node proxy.js
+# ou Docker :
+docker run -e LOG_BODY=true ...
 ```
 
 ---
@@ -109,6 +153,7 @@ docker pull ghcr.io/klementxv/proxy-llm:latest
 docker run -d \
   --name proxy-llm \
   -p 8989:8989 \
+  -v proxy-llm-certs:/certs \
   --add-host llm.local:<IP> \
   ghcr.io/klementxv/proxy-llm:latest
 ```

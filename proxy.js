@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 'use strict';
 
-const http = require('http');
+const fs    = require('fs');
+const http  = require('http');
 const https = require('https');
 const { URL } = require('url');
 
@@ -13,6 +14,8 @@ const TARGET     = (process.env.TARGET_URL          || 'https://llm.local').repl
 const INSECURE   = process.env.UPSTREAM_INSECURE   === 'true';
 const LOG_BODY   = process.env.LOG_BODY            === 'true';
 const TIMEOUT_MS = parseInt(process.env.TIMEOUT_MS || '300000', 10); // 5 min default — LLMs are slow
+const TLS_CERT   = process.env.TLS_CERT || '/certs/cert.pem';
+const TLS_KEY    = process.env.TLS_KEY  || '/certs/key.pem';
 
 const target     = new URL(TARGET);
 const proto      = target.protocol === 'https:' ? https : http;
@@ -63,9 +66,24 @@ function readBody(req) {
 }
 
 // ---------------------------------------------------------------------------
+// Server — HTTPS if cert/key files exist, plain HTTP otherwise
+// ---------------------------------------------------------------------------
+let serverModule, serverOpts, scheme;
+try {
+  serverOpts  = { cert: fs.readFileSync(TLS_CERT), key: fs.readFileSync(TLS_KEY) };
+  serverModule = https;
+  scheme       = 'https';
+} catch {
+  serverOpts  = {};
+  serverModule = http;
+  scheme       = 'http';
+  log('warn', `TLS cert not found (${TLS_CERT}) — falling back to plain HTTP`);
+}
+
+// ---------------------------------------------------------------------------
 // Request handler
 // ---------------------------------------------------------------------------
-const server = http.createServer(async (req, res) => {
+const server = serverModule.createServer(serverOpts, async (req, res) => {
   const id = Math.random().toString(36).slice(2, 8);
   log('info', `[${id}] ← ${req.method} ${req.url}`);
 
@@ -167,8 +185,9 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(PORT, '0.0.0.0', () => {
-  log('info', `proxy-llm listening on http://0.0.0.0:${PORT}`);
+  log('info', `proxy-llm listening on ${scheme}://0.0.0.0:${PORT}`);
   log('info', `forwarding to: ${TARGET}`);
+  if (scheme === 'https') log('info', `TLS cert: ${TLS_CERT}`);
   if (INSECURE) log('warn', 'upstream TLS verification DISABLED');
 });
 
