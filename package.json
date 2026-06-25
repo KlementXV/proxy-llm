@@ -1,0 +1,13 @@
+{
+  "name": "proxy-llm",
+  "version": "1.0.0",
+  "description": "Minimal HTTP proxy — rewrites tools[].function.parameters to arguments for broken OpenAI-compatible API gateways",
+  "main": "proxy.js",
+  "scripts": {
+    "start": "node proxy.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "MIT"
+}
