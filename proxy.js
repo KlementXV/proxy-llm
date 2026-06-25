@@ -9,7 +9,7 @@ const { URL } = require('url');
 // Config
 // ---------------------------------------------------------------------------
 const PORT       = parseInt(process.env.PORT       || '8989',    10);
-const TARGET     = (process.env.TARGET_URL          || 'https://llm.local/apigate').replace(/\/$/, '');
+const TARGET     = (process.env.TARGET_URL          || 'https://llm.local').replace(/\/$/, '');
 const INSECURE   = process.env.UPSTREAM_INSECURE   === 'true';
 const LOG_BODY   = process.env.LOG_BODY            === 'true';
 const TIMEOUT_MS = parseInt(process.env.TIMEOUT_MS || '300000', 10); // 5 min default — LLMs are slow
